@@ -27,8 +27,8 @@ from praxis import layers
 from praxis import optimizers
 from praxis import pax_fiddle
 from praxis import schedules
-from praxis.layers import transformers
-
+from praxis.layers import transformers, attentions
+from praxis.layers import gpu_fast_attention
 
 WeightInit = base_layer.WeightInit
 
@@ -93,7 +93,6 @@ def configure_gpt3_task(
     atten_wp.proj = ['data', 'mdl', None]
 
   return task_p
-
 
 ## 8 node
 @experiment_registry.register
@@ -164,6 +163,18 @@ class GPT126M(TransformerLmSpmdAdam):
     transformer_layer_p.tr_fflayer_tpl.ln_tpl.reductions_in_fp32 = True
     task_p.model.lm_tpl.final_ln_tpl.reductions_in_fp32 = True
 
+    if self.USE_FLASH_ATTENTION:
+      layer_p = (
+          stacked_p.transformer_layer_params_tpl
+      )
+      # Use Triton flash attention.
+      assert layer_p.tr_atten_tpl.cls == attentions.DotProductAttention
+      fused_tr_atten_tpl = pax_fiddle.Config(
+          gpu_fast_attention.GpuTritonFusedDotProductAttention,
+      )
+      fused_tr_atten_tpl.copy_fields_from(layer_p.tr_atten_tpl)
+      layer_p.tr_atten_tpl = fused_tr_atten_tpl
+
     model_p.params_init = WeightInit.Gaussian(self.INIT_STD)
     softmax_init = WeightInit.Gaussian(self.SOFTMAX_INIT_STD)
     model_p.lm_tpl.softmax_tpl.params_init = softmax_init
@@ -196,7 +207,9 @@ class Lambada126M(GPT126M, LambadaDataset):
 ## 32 node
 @experiment_registry.register
 class GPT5B(Pile126M):
-
+  # added by user
+  PACKED_INPUT = False
+  # CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
   USE_REPEATED_LAYER = True
   ICI_MESH_SHAPE = [1, 8, 1]
   DCN_MESH_SHAPE = [1, 32, 1]
@@ -293,4 +306,244 @@ class GPT175B(Pile126M):
 
   def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
     task_p = super().task()
+    return task_p
+
+
+## single node training
+@experiment_registry.register
+class SmallPileTest(Pile126M):
+  """Base config for an SPMD model."""
+  # add by user
+  USE_REPEATED_LAYER = True
+  PERCORE_BATCH_SIZE = 32
+
+  #
+  ICI_MESH_SHAPE = [8,1,1]
+  MAX_STEPS = 10000
+  PACKED_INPUT = False
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  # get a deterministic result
+  TRAIN_INPUT_RANDOM_SEED = 0
+  # use flash attention
+  USE_FLASH_ATTENTION = False
+  # USE_BIAS = False
+
+@experiment_registry.register
+class SmallPileTest1_3B(Pile126M):
+  ICI_MESH_SHAPE = [8,1,1]
+  MAX_STEPS = 10000
+  PACKED_INPUT = False
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  USE_REPEATED_LAYER = True
+  NUM_LAYERS = 24
+  NUM_HEADS = 32
+  MODEL_DIMS = 2048
+  HIDDEN_DIMS = 8192
+  DIMS_PER_HEAD = 64
+  
+  MAX_SEQ_LEN = 2048
+  VOCAB_SIZE = 51200
+
+  PERCORE_BATCH_SIZE = 4
+  # get a deterministic result
+  TRAIN_INPUT_RANDOM_SEED = 0
+  # use flash attention
+  USE_FLASH_ATTENTION = False
+
+from paxml.tasks.lm.params.lm_cloud import LmCloudSpmd, LmCloudSpmdPipeline
+
+# @experiment_registry.register
+# class LmCloudSpmd1_3B(LmCloudSpmd):
+
+#   USE_REPEATED_LAYER = True
+#   ICI_MESH_SHAPE = [8,1,1]
+#   DCN_MESH_SHAPE = [1,1,1]
+
+#   ATTEN_LOGIT_CAP = -1.0
+
+#   MAX_STEPS = 50
+#   PERCORE_BATCH_SIZE = 4
+
+#   NUM_LAYERS = 24
+#   NUM_HEADS = 32
+#   MODEL_DIMS = 2048
+#   HIDDEN_DIMS = 8192
+#   DIMS_PER_HEAD = 64
+
+#   MAX_SEQ_LEN = 2048
+#   VOCAB_SIZE = 51200
+
+#   INIT_STD = 0.01
+#   SOFTMAX_INIT_STD = 0.01
+
+#   ## optimizer-related
+#   LEARNING_RATE = 1.6e-4
+
+#   ## lr schedule
+#   LR_COS_WARMUP = 115
+#   LR_COS_DECAY_START = LR_COS_WARMUP+1
+#   LR_COS_DECAY_END = 62500
+#   PACKED_INPUT = False
+
+#   def task(self) -> tasks_lib.SingleTask.hparams:
+#     task_p = super().task()
+#     task_p.train.num_train_steps = self.MAX_STEPS
+#     return task_p
+
+
+# from paxml.tasks.lm.params.lm_cloud import LmCloudSpmd, LmCloudSpmdPipeline
+
+# @experiment_registry.register
+# class LmCloudSpmd126M(LmCloudSpmd):
+
+#   USE_REPEATED_LAYER = True
+#   ICI_MESH_SHAPE = [8,1,1]
+#   DCN_MESH_SHAPE = [1,1,1]
+
+#   ATTEN_LOGIT_CAP = -1.0
+
+#   MAX_STEPS = 1000
+#   PERCORE_BATCH_SIZE = 4
+
+#   NUM_LAYERS = 12
+#   NUM_HEADS = 12
+#   MODEL_DIMS = 768
+#   HIDDEN_DIMS = 3072
+#   DIMS_PER_HEAD = 64
+
+#   MAX_SEQ_LEN = 2048
+#   VOCAB_SIZE = 51200
+
+#   INIT_STD = 0.01
+#   SOFTMAX_INIT_STD = 0.01
+
+#   ## optimizer-related
+#   LEARNING_RATE = 1.6e-4
+
+#   ## lr schedule
+#   LR_COS_WARMUP = 115
+#   LR_COS_DECAY_START = LR_COS_WARMUP+1
+#   LR_COS_DECAY_END = 62500
+#   PACKED_INPUT = False
+
+#   def task(self) -> tasks_lib.SingleTask.hparams:
+#     task_p = super().task()
+#     task_p.train.num_train_steps = self.MAX_STEPS
+#     return task_p
+
+
+
+@experiment_registry.register
+class GPT1_3BPP(LmCloudSpmdPipeline):
+  # NUM_LAYERS = 24
+  NUM_LAYERS = 8
+  NUM_HEADS = 32
+  MODEL_DIMS = 2048
+  HIDDEN_DIMS = 8192
+  DIMS_PER_HEAD = 64
+
+  # CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
+  ATTEN_LOGIT_CAP = -1.0
+  USE_REPEATED_LAYER = False
+  ICI_MESH_SHAPE = [4,1,1,2]
+  DCN_MESH_SHAPE = [1,1,1,1]
+  PERCORE_BATCH_SIZE = 4
+  # MICROBATCH_SIZE = 16
+  NUM_MICROBATCHES = 4
+  MAX_STEPS = 10
+  NUM_STAGES = ICI_MESH_SHAPE[0]*DCN_MESH_SHAPE[0]
+
+  STREAM_IO = False
+  MAX_SEQ_LEN = 2048
+  VOCAB_SIZE = 51200
+  ACTIVATION_CLS = layers.GELU
+  USE_GATED_ACTIVATION = False
+  PACKED_INPUT = False
+
+  INIT_STD = 0.023
+  SOFTMAX_INIT_STD = 0.023
+
+  # optimizer related
+  LEARNING_RATE = 6e-4
+  ADAM_BETA1 = 0.9
+  ADAM_BETA2 = 0.95
+  ADAM_EPSILON = 1e-8
+  ADAM_EPSILON_ROOT = 0.0
+  CLIP_GRADIENT_NORM_TO_VALUE = 1.0
+  CLIP_THRESHOLD = 1.0
+
+  # Learning rate schedule
+  LR_SCHEDULE = 'linear_rampup_cosine_decay'
+  LR_COS_WARMUP = 0
+  LR_COS_DECAY_START = 1
+  LR_COS_DECAY_END = 500000
+  LR_COS_MIN_RATIO = 0.1
+  LR_COS_MAX = 1.0
+
+  ## TODO: check this! this matches mlperf training routine 
+  ## but we are not restoring from 4k checkpoint anymore. I think 
+  ## we might have to scale lr scheduler to account for different bs 
+  LEARNING_RATE = 2e-5
+
+  def task(self) -> tasks_lib.SingleTask.hparams:
+    task_p = super().task()
+    task_p.train.num_train_steps = self.MAX_STEPS
+    return task_p
+
+
+@experiment_registry.register
+class GPT126MPP(LmCloudSpmdPipeline):
+  NUM_LAYERS = 8
+  NUM_HEADS = 12
+  MODEL_DIMS = 768
+  HIDDEN_DIMS = 3072
+  DIMS_PER_HEAD = 64
+
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
+  ATTEN_LOGIT_CAP = -1.0
+  USE_REPEATED_LAYER = False
+  ICI_MESH_SHAPE = [2,1,1,4]
+  DCN_MESH_SHAPE = [1,1,1,1]
+  PERCORE_BATCH_SIZE = 4
+  # MICROBATCH_SIZE = 16
+  NUM_MICROBATCHES = 4
+  MAX_STEPS = 10
+  NUM_STAGES = ICI_MESH_SHAPE[0]*DCN_MESH_SHAPE[0]
+
+  STREAM_IO = False
+  MAX_SEQ_LEN = 2048
+  VOCAB_SIZE = 51200
+  ACTIVATION_CLS = layers.GELU
+  USE_GATED_ACTIVATION = False
+  PACKED_INPUT = False
+
+  INIT_STD = 0.023
+  SOFTMAX_INIT_STD = 0.023
+
+  # optimizer related
+  LEARNING_RATE = 6e-4
+  ADAM_BETA1 = 0.9
+  ADAM_BETA2 = 0.95
+  ADAM_EPSILON = 1e-8
+  ADAM_EPSILON_ROOT = 0.0
+  CLIP_GRADIENT_NORM_TO_VALUE = 1.0
+  CLIP_THRESHOLD = 1.0
+
+  # Learning rate schedule
+  LR_SCHEDULE = 'linear_rampup_cosine_decay'
+  LR_COS_WARMUP = 0
+  LR_COS_DECAY_START = 1
+  LR_COS_DECAY_END = 500000
+  LR_COS_MIN_RATIO = 0.1
+  LR_COS_MAX = 1.0
+
+  ## TODO: check this! this matches mlperf training routine 
+  ## but we are not restoring from 4k checkpoint anymore. I think 
+  ## we might have to scale lr scheduler to account for different bs 
+  LEARNING_RATE = 2e-5
+
+  def task(self) -> tasks_lib.SingleTask.hparams:
+    task_p = super().task()
+    task_p.train.num_train_steps = self.MAX_STEPS
     return task_p

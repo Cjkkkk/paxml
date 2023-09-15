@@ -353,6 +353,7 @@ class BaseTrainProgram(Program):
             ),
         )
       del state  # Unused.
+    logging.log_first_n(logging.INFO, "step: "+ str(new_step) + ", loss: " + str(train_outputs.loss), 10000)
     jax.monitoring.record_event_duration_secs(
         '/jax/pax/train/duration_sec', train_period.elapsed
     )
@@ -634,7 +635,8 @@ class SingleTaskTrainProgram(BaseTrainProgram):
   ) -> tuple[int, TrainState, StepFnOutput]:
     """The train step function."""
     train_step, _ = self._get_train_step(inputs)
-    return step + 1, *train_step(state, prng_key, inputs, static_args)
+    train_state, step_fn_output = train_step(state, prng_key, inputs, static_args)
+    return step + 1, train_state, step_fn_output
 
   def eval_train_step(
       self,

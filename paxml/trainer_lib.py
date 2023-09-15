@@ -920,6 +920,8 @@ class GradFnProtocol(Protocol):
       A tuple of (values, grads).
     """
 
+count = 0
+from jax.experimental import host_callback
 
 def _get_default_grad_fn(
     excluded_for_grad: NestedMap, excluded_for_opt: NestedMap
@@ -959,6 +961,7 @@ def _get_default_grad_fn(
     else:
       g = functools.partial(learner.stochastic_gradient.grad_fn, _loss)
     values, grads = g(with_grad, (no_grad, inputs), prng_key)
+    #jax.debug.print("{grads}", grads=grads['params']['lm']['transformer']['x_layers_0']['self_attention']['combined_qkv']['b'])
     grads = jax.tree_map(
         lambda eo, eg, m, g: jnp.zeros_like(m) if eg and not eo else g,
         excluded_for_opt,
@@ -966,6 +969,17 @@ def _get_default_grad_fn(
         mdl_vars,
         grads,
     )
+    # jax.debug.print("{grads}", grads=grads)
+    def dump_to_file(grads, _):
+        global count
+        if count >= 0:
+          filename = '/pax/scratch/test_fmha_step_' + str(count) +'.npz'
+          with open(filename, 'wb') as file:
+            jnp.savez(file, grads['params']['lm']['transformer']['x_layers_11']['self_attention']['combined_qkv']['w'])
+            # jnp.savez(file, qkv=qkv, doutput=doutput)
+        count += 1
+
+    #host_callback.id_tap(dump_to_file, grads)
     return values, grads
 
   return grad_fn
