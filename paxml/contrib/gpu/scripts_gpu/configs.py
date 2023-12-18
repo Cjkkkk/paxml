@@ -216,7 +216,7 @@ class GPT5B(Pile126M):
   CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_DOT_WITH_NO_BATCH_DIM
   MAX_STEPS = 75000
 
-  PERCORE_BATCH_SIZE = 8
+  PERCORE_BATCH_SIZE = 16
 
   NUM_LAYERS = 24
   NUM_HEADS = 32
@@ -314,28 +314,26 @@ class GPT175B(Pile126M):
 class SmallPileTest(Pile126M):
   """Base config for an SPMD model."""
   # add by user
-  USE_REPEATED_LAYER = True
-  PERCORE_BATCH_SIZE = 32
-
-  #
+  # PERCORE_BATCH_SIZE = 32
+  # NUM_LAYERS = 2
+  USE_REPEATED_LAYER = False
   ICI_MESH_SHAPE = [8,1,1]
-  MAX_STEPS = 10000
+  MAX_STEPS = 100
   PACKED_INPUT = False
-  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
   # get a deterministic result
   TRAIN_INPUT_RANDOM_SEED = 0
   # use flash attention
-  USE_FLASH_ATTENTION = False
-  # USE_BIAS = False
+  USE_FLASH_ATTENTION = True
 
 @experiment_registry.register
 class SmallPileTest1_3B(Pile126M):
   ICI_MESH_SHAPE = [8,1,1]
-  MAX_STEPS = 10000
+  MAX_STEPS = 1
   PACKED_INPUT = False
-  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
   USE_REPEATED_LAYER = True
-  NUM_LAYERS = 24
+  NUM_LAYERS = 4
   NUM_HEADS = 32
   MODEL_DIMS = 2048
   HIDDEN_DIMS = 8192
@@ -349,6 +347,25 @@ class SmallPileTest1_3B(Pile126M):
   TRAIN_INPUT_RANDOM_SEED = 0
   # use flash attention
   USE_FLASH_ATTENTION = False
+
+  # optimizer
+  ## optimizer-related
+  ADAM_BETA1 = 0.9
+  ADAM_BETA2 = 0.95
+  LEARNING_RATE = 2.0e-5
+  ADAM_EPSILON_ROOT = 0.0
+  ADAM_EPSILON = 1e-8
+  WEIGHT_DECAY = 0.1
+  ADAM_CLIP_THRESHOLD = -1.0
+  CLIP_GRADIENT_NORM_TO_VALUE = 1.0
+
+  ## lr schedule
+  LR_SCHEDULE = 'linear_rampup_cosine_decay'
+  LR_COS_WARMUP = 477
+  LR_COS_DECAY_START = LR_COS_WARMUP+1
+  LR_COS_DECAY_END = 500000
+  R_COS_MIN_RATIO = 0.1
+  LR_COS_MAX = 1.0
 
 from paxml.tasks.lm.params.lm_cloud import LmCloudSpmd, LmCloudSpmdPipeline
 
@@ -436,22 +453,23 @@ from paxml.tasks.lm.params.lm_cloud import LmCloudSpmd, LmCloudSpmdPipeline
 @experiment_registry.register
 class GPT1_3BPP(LmCloudSpmdPipeline):
   # NUM_LAYERS = 24
-  NUM_LAYERS = 8
+  NUM_LAYERS = 2
   NUM_HEADS = 32
   MODEL_DIMS = 2048
   HIDDEN_DIMS = 8192
   DIMS_PER_HEAD = 64
 
-  # CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
-  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
+  # CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  # CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_DOT_ONLY
   ATTEN_LOGIT_CAP = -1.0
   USE_REPEATED_LAYER = False
-  ICI_MESH_SHAPE = [4,1,1,2]
+  ICI_MESH_SHAPE = [2,1,1,2]
   DCN_MESH_SHAPE = [1,1,1,1]
   PERCORE_BATCH_SIZE = 4
   # MICROBATCH_SIZE = 16
   NUM_MICROBATCHES = 4
-  MAX_STEPS = 10
+  MAX_STEPS = 1
   NUM_STAGES = ICI_MESH_SHAPE[0]*DCN_MESH_SHAPE[0]
 
   STREAM_IO = False
@@ -494,21 +512,21 @@ class GPT1_3BPP(LmCloudSpmdPipeline):
 
 @experiment_registry.register
 class GPT126MPP(LmCloudSpmdPipeline):
-  NUM_LAYERS = 8
+  NUM_LAYERS = 4
   NUM_HEADS = 12
   MODEL_DIMS = 768
   HIDDEN_DIMS = 3072
   DIMS_PER_HEAD = 64
 
-  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_EVERYTHING
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
   ATTEN_LOGIT_CAP = -1.0
   USE_REPEATED_LAYER = False
-  ICI_MESH_SHAPE = [2,1,1,4]
+  ICI_MESH_SHAPE = [2,1,1,1]
   DCN_MESH_SHAPE = [1,1,1,1]
   PERCORE_BATCH_SIZE = 4
   # MICROBATCH_SIZE = 16
   NUM_MICROBATCHES = 4
-  MAX_STEPS = 10
+  MAX_STEPS = 1
   NUM_STAGES = ICI_MESH_SHAPE[0]*DCN_MESH_SHAPE[0]
 
   STREAM_IO = False
@@ -546,4 +564,54 @@ class GPT126MPP(LmCloudSpmdPipeline):
   def task(self) -> tasks_lib.SingleTask.hparams:
     task_p = super().task()
     task_p.train.num_train_steps = self.MAX_STEPS
+    return task_p
+
+
+## 1 node
+@experiment_registry.register
+class GPT5B1N(Pile126M):
+  USE_FLASH_ATTENTION = False
+  TRAIN_INPUT_RANDOM_SEED = 0
+
+  USE_REPEATED_LAYER = True
+  ICI_MESH_SHAPE = [1, 8, 1]
+  DCN_MESH_SHAPE = [1, 1, 1]
+  CHECKPOINT_POLICY = layers.AutodiffCheckpointType.SAVE_NOTHING
+  MAX_STEPS = 10
+
+  PERCORE_BATCH_SIZE = 2
+
+  NUM_LAYERS = 24
+  NUM_HEADS = 32
+  MODEL_DIMS = 4096
+  HIDDEN_DIMS = 16384
+  DIMS_PER_HEAD = 128
+
+  INIT_STD = 0.01
+  SOFTMAX_INIT_STD = 0.01
+
+  ## optimizer-related
+  LEARNING_RATE = 1.6e-4
+
+  ## lr schedule
+  LR_COS_WARMUP = 115
+  LR_COS_DECAY_START = LR_COS_WARMUP+1
+  LR_COS_DECAY_END = 62500
+
+  CHECKPOINT_EVERY_N_STEPS = 250
+  SUMMARY_INTERVAL_STEPS = 10
+
+  def task(self) -> pax_fiddle.Config[tasks_lib.SingleTask]:
+    task_p = super().task()
+
+    model_p = task_p.model
+    stacked_p = model_p.lm_tpl.stacked_transformer_tpl
+    if issubclass(
+        fdl.get_callable(stacked_p), transformers.StackedTransformerRepeated
+    ):
+      stacked_p = stacked_p.block
+
+    stacked_p.input_dropout_prob = 0.1
+    stacked_p.residual_dropout_prob = 0.1
+    stacked_p.atten_dropout_prob = 0.1
     return task_p
